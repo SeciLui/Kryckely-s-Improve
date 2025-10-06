@@ -1,3 +1,15 @@
+Name: lesson-scribe
+Version: 0.1.0
+Summary: Journal de leçons avec gestion audio et transcription.
+Author-email: Kevin <kevin@example.com>
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: numpy>=1.23
+Requires-Dist: sounddevice>=0.4
+Provides-Extra: dev
+Requires-Dist: invoke>=2.2; extra == "dev"
+
 # Lesson Scribe
 
 Lesson Scribe est une application de bureau Tkinter pensée pour consigner des leçons
@@ -56,7 +68,7 @@ pip install -e .
 ```
 
 > Astuce : `invoke install --dev` installe le projet en mode editable avec les
-> dépendances de développement.
+dépendances de développement.
 
 ## Lancement de l’application
 

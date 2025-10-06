@@ -1,4 +1,4 @@
-"""Automation tasks for the Convoi Wizard project."""
+"""Automation tasks for the Lesson Scribe project."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def _is_project_installed(context: Context) -> bool:
         return False
 
     result = context.run(
-        f"{_quote(VENV_PYTHON)} -m pip show convoi-wizard",
+        f"{_quote(VENV_PYTHON)} -m pip show lesson-scribe",
         env=_venv_env(),
         hide=True,
         warn=True,
@@ -124,12 +124,12 @@ def install(context: Context) -> None:
 
 @task
 def run(context: Context) -> None:
-    """Launch the Convoi Wizard desktop application from the virtualenv."""
+    """Launch the Lesson Scribe desktop application from the virtualenv."""
 
     if not _is_project_installed(context):
         _ensure_installation(context)
 
-    _run(context, f"{_quote(VENV_PYTHON)} -m convoi_wizard", use_venv=True)
+    _run(context, f"{_quote(VENV_PYTHON)} -m lesson_scribe", use_venv=True)
 
 
 @task
