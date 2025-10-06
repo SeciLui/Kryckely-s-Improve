@@ -1,0 +1,5 @@
+invoke>=2.2
+pyperclip>=1.8
+python-dotenv>=1.0
+numpy>=1.23
+sounddevice>=0.4

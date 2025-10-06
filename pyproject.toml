@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "convoi-wizard"
+version = "0.1.0"
+description = "Desktop companion to manage relational convoy logs and AI-assisted analysis."
+readme = "README.md"
+authors = [{ name = "Kevin", email = "kevin@example.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0",
+    "numpy>=1.23",
+    "sounddevice>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["invoke>=2.2"]
+
+[project.scripts]
+convoi-wizard = "convoi_wizard:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

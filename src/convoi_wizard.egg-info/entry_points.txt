@@ -1,0 +1,2 @@
+[console_scripts]
+convoi-wizard = convoi_wizard:main
