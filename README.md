@@ -58,6 +58,10 @@ pip install -e .
 > Astuce : `invoke install --dev` installe le projet en mode editable avec les
 > dépendances de développement.
 
+> Remarque : la prise en charge du glisser-déposer global de l’audio s’appuie sur
+> [`tkinterdnd2`](https://pypi.org/project/tkinterdnd2/), installé automatiquement
+> via `requirements.txt`.
+
 ## Lancement de l’application
 
 ```bash

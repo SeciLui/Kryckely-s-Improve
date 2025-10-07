@@ -15,13 +15,33 @@ import threading
 import time
 import uuid
 import wave
+import importlib.util
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+from typing import Any, cast
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
+
+_tkdnd_spec = importlib.util.find_spec("tkinterdnd2")
+if _tkdnd_spec is not None:
+    _tkdnd_module = importlib.util.module_from_spec(_tkdnd_spec)
+    assert _tkdnd_spec.loader is not None  # pour mypy
+    sys.modules[_tkdnd_spec.name] = _tkdnd_module
+    _tkdnd_spec.loader.exec_module(_tkdnd_module)
+    DND_FILES = getattr(_tkdnd_module, "DND_FILES", "DND_Files")
+    TkinterDnD = getattr(_tkdnd_module, "TkinterDnD", None)
+else:
+    DND_FILES = "DND_Files"
+    TkinterDnD = None
+
+if TkinterDnD is not None:
+    BaseTk = cast(type[tk.Tk], TkinterDnD.Tk)
+    BaseToplevel = cast(type[tk.Toplevel], TkinterDnD.Toplevel)
+else:  # pragma: no cover - mode sans drag-and-drop natif
+    BaseTk = tk.Tk
+    BaseToplevel = tk.Toplevel
 
 from dotenv import load_dotenv
 
@@ -190,7 +210,7 @@ class Lesson:
 # ---------------------------------------------------------------------------
 
 
-class LessonDialog(tk.Toplevel):
+class LessonDialog(BaseToplevel):
     """Fenêtre modale pour créer ou éditer une leçon."""
 
     def __init__(self, master: tk.Misc, initial: Lesson | None = None):
@@ -301,7 +321,6 @@ class LessonDialog(tk.Toplevel):
         self.audio_display_label.grid(row=0, column=0, columnspan=3, sticky="we", padx=4, pady=(4, 2))
         self._audio_drop_highlight_widget = self.audio_display_label
         self._audio_drop_default_bg = self.audio_display_label.cget("background")
-        self._refresh_audio_display_text(self.initial_audio_path or None)
         choose_button = ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file)
         choose_button.grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
         clear_button = ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file)
@@ -325,6 +344,7 @@ class LessonDialog(tk.Toplevel):
             highlight_widget=self.audio_display_label,
             widgets=drop_targets,
         )
+        self._refresh_audio_display_text(self.initial_audio_path or None)
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.wait_visibility()
@@ -357,6 +377,7 @@ class LessonDialog(tk.Toplevel):
         self.initial_audio_path = ""
         self._audio_source_is_temp = False
         self._refresh_audio_display_text(None)
+        self.var_record_status.set("Aucun enregistrement en cours.")
 
     def _apply_selected_audio_file(self, path: str) -> None:
         if self._audio_source_is_temp and self.audio_source_path:
@@ -365,6 +386,9 @@ class LessonDialog(tk.Toplevel):
         self.audio_cleared = False
         self._audio_source_is_temp = False
         self._refresh_audio_display_text(path)
+        self.var_record_status.set(
+            "Fichier audio chargé. La transcription démarrera après l’enregistrement de la leçon."
+        )
 
     def _refresh_audio_display_text(self, path: str | None) -> None:
         if path:
@@ -378,16 +402,15 @@ class LessonDialog(tk.Toplevel):
                 self.var_audio_display.set("Aucun fichier audio")
 
     def _initialize_audio_drag_and_drop(self, *, highlight_widget: tk.Widget, widgets: list[tk.Widget]) -> None:
-        if not widgets:
+        if not widgets or TkinterDnD is None:
+            self._audio_drop_enabled = False
             return
-        try:
-            highlight_widget.tk.call("package", "require", "tkdnd")
-        except tk.TclError:
-            return
-        self._audio_drop_enabled = True
         self._audio_drop_highlight_widget = highlight_widget
+        any_registered = False
         for widget in widgets:
-            self._register_audio_drop_target(widget)
+            if self._register_audio_drop_target(widget):
+                any_registered = True
+        self._audio_drop_enabled = any_registered
 
     def _collect_audio_drop_widgets(self, root: tk.Widget) -> list[tk.Widget]:
         widgets: list[tk.Widget] = []
@@ -405,27 +428,32 @@ class LessonDialog(tk.Toplevel):
         visit(root)
         return widgets
 
-    def _register_audio_drop_target(self, widget: tk.Widget) -> None:
+    def _register_audio_drop_target(self, widget: tk.Widget) -> bool:
         if widget in self._audio_drop_targets:
-            return
+            return True
+        drop_register = getattr(widget, "drop_target_register", None)
+        dnd_bind = getattr(widget, "dnd_bind", None)
+        if not callable(drop_register) or not callable(dnd_bind):
+            return False
+        try:
+            drop_register(DND_FILES)
+            dnd_bind("<<Drop>>", lambda event: self._on_audio_drop(getattr(event, "data", "")))
+            dnd_bind("<<DragEnter>>", lambda event: self._on_audio_drag_enter(getattr(event, "data", "")))
+            dnd_bind("<<DragLeave>>", lambda event: self._on_audio_drag_leave(getattr(event, "data", "")))
+        except tk.TclError:
+            return False
         self._audio_drop_targets.add(widget)
-        widget.tk.call("tkdnd::drop_target", "register", widget._w, "DND_Files")
-        drop_cmd = widget.register(self._on_audio_drop)
-        widget.tk.call("bind", widget._w, "<<Drop>>", f"{{{drop_cmd} %D}}")
-        enter_cmd = widget.register(self._on_audio_drag_enter)
-        leave_cmd = widget.register(self._on_audio_drag_leave)
-        widget.tk.call("bind", widget._w, "<<DragEnter>>", f"{{{enter_cmd} %D}}")
-        widget.tk.call("bind", widget._w, "<<DragLeave>>", f"{{{leave_cmd} %D}}")
+        return True
 
-    def _on_audio_drag_enter(self, _data: str) -> str:
+    def _on_audio_drag_enter(self, _data: str | None = None) -> str:
         self._set_audio_drop_highlight(True)
         return ""
 
-    def _on_audio_drag_leave(self, _data: str) -> str:
+    def _on_audio_drag_leave(self, _data: str | None = None) -> str:
         self._set_audio_drop_highlight(False)
         return ""
 
-    def _on_audio_drop(self, data: str) -> str:
+    def _on_audio_drop(self, data: str | None = None) -> str:
         self._set_audio_drop_highlight(False)
         if not data:
             return ""
@@ -686,7 +714,7 @@ class LessonDialog(tk.Toplevel):
 # ---------------------------------------------------------------------------
 
 
-class LessonScribeApp(tk.Tk):
+class LessonScribeApp(BaseTk):
     """Fenêtre principale de Lesson Scribe."""
 
     def __init__(self) -> None:
