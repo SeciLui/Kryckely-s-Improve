@@ -16,6 +16,7 @@ import time
 import uuid
 import wave
 import importlib.util
+import urllib.parse
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, cast
@@ -441,9 +442,22 @@ class LessonDialog(BaseToplevel):
             return False
         try:
             drop_register(DND_FILES)
-            dnd_bind("<<Drop>>", lambda event: self._on_audio_drop(getattr(event, "data", "")))
-            dnd_bind("<<DragEnter>>", lambda event: self._on_audio_drag_enter(getattr(event, "data", "")))
-            dnd_bind("<<DragLeave>>", lambda event: self._on_audio_drag_leave(getattr(event, "data", "")))
+
+            def _handle_drop(event: Any) -> str:
+                return self._on_audio_drop(getattr(event, "data", ""))
+
+            def _handle_drag_enter(event: Any) -> str:
+                return self._on_audio_drag_enter(getattr(event, "data", ""))
+
+            def _handle_drag_leave(event: Any) -> str:
+                return self._on_audio_drag_leave(getattr(event, "data", ""))
+
+            for sequence in ("<<Drop>>", f"<<Drop:{DND_FILES}>>"):
+                dnd_bind(sequence, _handle_drop)
+            for sequence in ("<<DragEnter>>", f"<<DragEnter:{DND_FILES}>>"):
+                dnd_bind(sequence, _handle_drag_enter)
+            for sequence in ("<<DragLeave>>", f"<<DragLeave:{DND_FILES}>>"):
+                dnd_bind(sequence, _handle_drag_leave)
         except tk.TclError:
             return False
         self._audio_drop_targets.add(widget)
@@ -459,12 +473,10 @@ class LessonDialog(BaseToplevel):
 
     def _on_audio_drop(self, data: str | None = None) -> str:
         self._set_audio_drop_highlight(False)
-        if not data:
+        paths = self._parse_dnd_file_list(data)
+        if not paths:
             return ""
-        files = self.tk.splitlist(data)
-        if not files:
-            return ""
-        path = files[0]
+        path = os.path.abspath(paths[0])
         if not os.path.isfile(path):
             messagebox.showwarning("Audio", "Le fichier déposé est introuvable.", parent=self)
             return ""
@@ -478,6 +490,41 @@ class LessonDialog(BaseToplevel):
         self.stop_audio_recording(keep_result=False, show_message=False)
         self._apply_selected_audio_file(path)
         return ""
+
+    def _parse_dnd_file_list(self, data: str | None) -> list[str]:
+        if not data:
+            return []
+        try:
+            raw_items = self.tk.splitlist(data)
+        except tk.TclError:
+            raw_items = data.split()
+
+        results: list[str] = []
+        for item in raw_items:
+            if not item:
+                continue
+            # Les systèmes basés sur XDND transmettent souvent des URI file://.
+            candidate = item.strip()
+            if candidate.startswith("file://"):
+                parsed = urllib.parse.urlparse(candidate)
+                if parsed.scheme.lower() != "file":
+                    continue
+                path = urllib.parse.unquote(parsed.path or "")
+                netloc = parsed.netloc or ""
+                if netloc and netloc.lower() not in {"localhost", "127.0.0.1"}:
+                    if not path.startswith("//"):
+                        path = f"//{netloc}{path}"
+                    elif not path and netloc:
+                        path = f"//{netloc}"
+                if sys.platform.startswith("win") and path.startswith("/") and len(path) > 2 and path[2] == ":":
+                    path = path.lstrip("/\\")
+                candidate = path
+            elif candidate.startswith("{") and candidate.endswith("}"):
+                candidate = candidate[1:-1]
+            if sys.platform.startswith("win"):
+                candidate = candidate.replace("/", "\\")
+            results.append(candidate)
+        return results
 
     def _set_audio_drop_highlight(self, active: bool) -> None:
         widget = self._audio_drop_highlight_widget
