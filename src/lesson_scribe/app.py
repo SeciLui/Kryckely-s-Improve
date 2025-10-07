@@ -37,8 +37,12 @@ else:
     TkinterDnD = None
 
 if TkinterDnD is not None:
-    BaseTk = cast(type[tk.Tk], TkinterDnD.Tk)
-    BaseToplevel = cast(type[tk.Toplevel], TkinterDnD.Toplevel)
+    BaseTk = cast(type[tk.Tk], getattr(TkinterDnD, "Tk", tk.Tk))
+    _DnDToplevel = getattr(TkinterDnD, "Toplevel", None)
+    if _DnDToplevel is None:
+        BaseToplevel = tk.Toplevel
+    else:
+        BaseToplevel = cast(type[tk.Toplevel], _DnDToplevel)
 else:  # pragma: no cover - mode sans drag-and-drop natif
     BaseTk = tk.Tk
     BaseToplevel = tk.Toplevel
