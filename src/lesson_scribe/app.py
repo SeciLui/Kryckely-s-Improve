@@ -59,6 +59,21 @@ def _load_env_from_config() -> None:
         load_dotenv(override=False)
 
 
+def _parse_default_time_range(raw_value: str | None) -> tuple[str | None, str | None]:
+    if not raw_value:
+        return None, None
+    candidate = raw_value.strip()
+    if not candidate:
+        return None, None
+    if "-" in candidate:
+        start_text, end_text = (part.strip() for part in candidate.split("-", 1))
+    else:
+        start_text, end_text = candidate, ""
+    start = start_text if parse_hhmm(start_text) is not None else None
+    end = end_text if parse_hhmm(end_text) is not None else None
+    return start, end
+
+
 def safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -561,6 +576,7 @@ class LessonScribeApp(tk.Tk):
     """Fenêtre principale de Lesson Scribe."""
 
     def __init__(self) -> None:
+        _load_env_from_config()
         super().__init__()
         self.title(APP_NAME)
         self.geometry("1280x800")
@@ -581,6 +597,14 @@ class LessonScribeApp(tk.Tk):
         self._transcription_queue: "Queue[tuple[str, str, Any]]" = Queue()
         self._active_transcription: dict[str, Any] | None = None
 
+        default_title = os.environ.get("LESSON_SCRIBE_DEFAULT_TITLE") or os.environ.get("LESSON_DEFAULT_TITLE")
+        self.default_title_template = default_title.strip() if default_title and default_title.strip() else None
+
+        raw_time = os.environ.get("LESSON_SCRIBE_DEFAULT_TIME") or os.environ.get("LESSON_DEFAULT_TIME")
+        start_time, end_time = _parse_default_time_range(raw_time)
+        self.default_start_time = start_time
+        self.default_end_time = end_time
+
         self.default_workspace_var: str | None = None
         self.default_workspace: Path | None = None
         for var_name in ("LESSON_SCRIBE_DEFAULT_WORKSPACE", "LESSON_DEFAULT_WORKSPACE"):
@@ -597,6 +621,28 @@ class LessonScribeApp(tk.Tk):
         self.select_lesson(None)
         self.after(100, self.ensure_initial_workspace)
         self.after(200, self._poll_transcription_queue)
+
+    def _build_default_lesson(self) -> Lesson:
+        lesson = Lesson()
+        if self.default_start_time:
+            lesson.start = self.default_start_time
+        if self.default_end_time:
+            lesson.end = self.default_end_time
+        if lesson.start and lesson.end:
+            computed = minutes_from_times(lesson.start, lesson.end)
+            if computed is not None:
+                lesson.minutes = computed
+        return lesson
+
+    def _apply_lesson_defaults(self, lesson: Lesson) -> Lesson:
+        if not lesson.title and self.default_title_template:
+            date_label = lesson.date or datetime.date.today().isoformat()
+            lesson.title = f"{self.default_title_template} {date_label}".strip()
+        if lesson.minutes <= 0 and lesson.start and lesson.end:
+            computed = minutes_from_times(lesson.start, lesson.end)
+            if computed is not None:
+                lesson.minutes = computed
+        return lesson
 
     # ------------------------------------------------------------------
     # Construction UI
@@ -807,11 +853,12 @@ class LessonScribeApp(tk.Tk):
     # ------------------------------------------------------------------
 
     def on_add_lesson(self) -> None:
-        dialog = LessonDialog(self)
+        dialog = LessonDialog(self, initial=self._build_default_lesson())
         self.wait_window(dialog)
         result = dialog.result
         if not result:
             return
+        result = self._apply_lesson_defaults(result)
         lesson = self._prepare_lesson_assets(result)
         self.lessons.append(lesson)
         self.lessons.sort(key=lambda l: (l.date or "", l.start or ""))
@@ -830,6 +877,7 @@ class LessonScribeApp(tk.Tk):
         result = dialog.result
         if not result:
             return
+        result = self._apply_lesson_defaults(result)
         lesson = self._prepare_lesson_assets(result, existing=current)
         lesson.updated_at = human_datetime()
         self.lessons[self.current_index] = lesson
@@ -1544,3 +1592,7 @@ def main() -> None:
 
 
 __all__ = ["LessonScribeApp", "main"]
+
+
+if __name__ == "__main__":
+    main()

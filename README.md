@@ -76,6 +76,11 @@ ajustez les valeurs selon votre environnement :
 
 * `LESSON_SCRIBE_DEFAULT_WORKSPACE` (alias : `LESSON_DEFAULT_WORKSPACE`) : chemin
   vers un workspace Lesson Scribe à ouvrir automatiquement.
+* `LESSON_SCRIBE_DEFAULT_TITLE` (alias : `LESSON_DEFAULT_TITLE`) : titre utilisé
+  lorsqu’une leçon est enregistrée sans titre (la date de la leçon est ajoutée).
+* `LESSON_SCRIBE_DEFAULT_TIME` (alias : `LESSON_DEFAULT_TIME`) : horaire à
+  pré-remplir lors de la création d’une leçon. Utilisez `HH:MM-HH:MM` pour une
+  plage complète ou uniquement `HH:MM` pour renseigner l’heure de début.
 * `VIBE_CLI`, `VIBE_MODEL_PATH`, `VIBE_LANGUAGE`, `VIBE_THREADS`,
   `VIBE_TEMPERATURE` : paramètres optionnels pour piloter Vibe.
 
