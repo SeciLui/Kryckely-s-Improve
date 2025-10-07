@@ -37,16 +37,31 @@ else:
     DND_FILES = "DND_Files"
     TkinterDnD = None
 
-if TkinterDnD is not None:
-    BaseTk = cast(type[tk.Tk], getattr(TkinterDnD, "Tk", tk.Tk))
-    _DnDToplevel = getattr(TkinterDnD, "Toplevel", None)
-    if _DnDToplevel is None:
-        BaseToplevel = tk.Toplevel
-    else:
-        BaseToplevel = cast(type[tk.Toplevel], _DnDToplevel)
-else:  # pragma: no cover - mode sans drag-and-drop natif
-    BaseTk = tk.Tk
-    BaseToplevel = tk.Toplevel
+
+def _build_dnd_base_classes() -> tuple[type[tk.Tk], type[tk.Toplevel]]:
+    if TkinterDnD is None:
+        return tk.Tk, tk.Toplevel
+
+    dnd_tk_cls = cast(type[tk.Tk], getattr(TkinterDnD, "Tk", tk.Tk))
+
+    if hasattr(TkinterDnD, "Toplevel"):
+        dnd_toplevel_cls = cast(type[tk.Toplevel], getattr(TkinterDnD, "Toplevel"))
+        return dnd_tk_cls, dnd_toplevel_cls
+
+    require = getattr(TkinterDnD, "_require", None)
+    wrapper_cls = getattr(TkinterDnD, "DnDWrapper", None)
+    if not callable(require) or wrapper_cls is None:
+        return dnd_tk_cls, tk.Toplevel
+
+    class DnDToplevel(tk.Toplevel, wrapper_cls):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            tk.Toplevel.__init__(self, *args, **kwargs)
+            require(self)
+
+    return dnd_tk_cls, cast(type[tk.Toplevel], DnDToplevel)
+
+
+BaseTk, BaseToplevel = _build_dnd_base_classes()
 
 from dotenv import load_dotenv
 
@@ -441,16 +456,21 @@ class LessonDialog(BaseToplevel):
         if not callable(drop_register) or not callable(dnd_bind):
             return False
         try:
-            drop_register(DND_FILES)
+            drop_register(
+                DND_FILES,
+                "DND_Text",
+                "text/uri-list",
+                "CF_HDROP",
+            )
 
             def _handle_drop(event: Any) -> str:
-                return self._on_audio_drop(getattr(event, "data", ""))
+                return self._on_audio_drop(event)
 
             def _handle_drag_enter(event: Any) -> str:
-                return self._on_audio_drag_enter(getattr(event, "data", ""))
+                return self._on_audio_drag_enter(event)
 
             def _handle_drag_leave(event: Any) -> str:
-                return self._on_audio_drag_leave(getattr(event, "data", ""))
+                return self._on_audio_drag_leave(event)
 
             for sequence in ("<<Drop>>", f"<<Drop:{DND_FILES}>>"):
                 dnd_bind(sequence, _handle_drop)
@@ -458,38 +478,45 @@ class LessonDialog(BaseToplevel):
                 dnd_bind(sequence, _handle_drag_enter)
             for sequence in ("<<DragLeave>>", f"<<DragLeave:{DND_FILES}>>"):
                 dnd_bind(sequence, _handle_drag_leave)
-        except tk.TclError:
+        except (tk.TclError, RuntimeError):
             return False
         self._audio_drop_targets.add(widget)
         return True
 
-    def _on_audio_drag_enter(self, _data: str | None = None) -> str:
+    def _on_audio_drag_enter(self, _event: Any = None) -> str:
         self._set_audio_drop_highlight(True)
-        return ""
+        if _event is not None and getattr(_event, "action", ""):
+            return getattr(_event, "action")
+        return "copy"
 
-    def _on_audio_drag_leave(self, _data: str | None = None) -> str:
+    def _on_audio_drag_leave(self, _event: Any = None) -> str:
         self._set_audio_drop_highlight(False)
-        return ""
+        if _event is not None and getattr(_event, "action", ""):
+            return getattr(_event, "action")
+        return "copy"
 
-    def _on_audio_drop(self, data: str | None = None) -> str:
+    def _on_audio_drop(self, event: Any | None = None) -> str:
         self._set_audio_drop_highlight(False)
+        data = getattr(event, "data", None) if event is not None else None
         paths = self._parse_dnd_file_list(data)
         if not paths:
-            return ""
+            return getattr(event, "action", "copy") if event is not None else "copy"
         path = os.path.abspath(paths[0])
         if not os.path.isfile(path):
             messagebox.showwarning("Audio", "Le fichier déposé est introuvable.", parent=self)
-            return ""
+            return getattr(event, "action", "copy") if event is not None else "copy"
         if not self._is_supported_audio_file(path):
             messagebox.showwarning(
                 "Audio",
                 "Seuls les fichiers audio (wav, mp3, m4a, aac, flac, ogg) sont acceptés.",
                 parent=self,
             )
-            return ""
+            return getattr(event, "action", "copy") if event is not None else "copy"
         self.stop_audio_recording(keep_result=False, show_message=False)
         self._apply_selected_audio_file(path)
-        return ""
+        if event is not None and getattr(event, "action", ""):
+            return getattr(event, "action")
+        return "copy"
 
     def _parse_dnd_file_list(self, data: str | None) -> list[str]:
         if not data:
