@@ -233,7 +233,9 @@ class LessonDialog(tk.Toplevel):
         self._recording_status_message: str | None = None
         self._temp_recordings: set[str] = set()
         self._audio_drop_enabled = False
-        self._audio_drop_target: tk.Widget | None = None
+        self._audio_drop_targets: set[tk.Widget] = set()
+        self._audio_drop_highlight_widget: tk.Widget | None = None
+        self._audio_drop_default_bg: str | None = None
 
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
@@ -297,24 +299,33 @@ class LessonDialog(tk.Toplevel):
             pady=4,
         )
         self.audio_display_label.grid(row=0, column=0, columnspan=3, sticky="we", padx=4, pady=(4, 2))
+        self._audio_drop_highlight_widget = self.audio_display_label
         self._audio_drop_default_bg = self.audio_display_label.cget("background")
-        self._setup_audio_drag_and_drop(self.audio_display_label)
         self._refresh_audio_display_text(self.initial_audio_path or None)
-        ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file).grid(
-            row=1, column=0, sticky="w", padx=4, pady=(0, 4)
-        )
-        ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file).grid(
-            row=1, column=1, sticky="w", padx=4, pady=(0, 4)
-        )
-        ttk.Button(audio_box, textvariable=self.var_record_button, command=self.toggle_audio_recording).grid(
-            row=1, column=2, sticky="e", padx=4, pady=(0, 4)
-        )
-        ttk.Label(
+        choose_button = ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file)
+        choose_button.grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+        clear_button = ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file)
+        clear_button.grid(row=1, column=1, sticky="w", padx=4, pady=(0, 4))
+        record_button = ttk.Button(audio_box, textvariable=self.var_record_button, command=self.toggle_audio_recording)
+        record_button.grid(row=1, column=2, sticky="e", padx=4, pady=(0, 4))
+        record_status_label = ttk.Label(
             audio_box,
             textvariable=self.var_record_status,
             wraplength=380,
             foreground="#555555",
-        ).grid(row=2, column=0, columnspan=3, sticky="we", padx=4, pady=(0, 4))
+        )
+        record_status_label.grid(row=2, column=0, columnspan=3, sticky="we", padx=4, pady=(0, 4))
+        self._initialize_audio_drag_and_drop(
+            highlight_widget=self.audio_display_label,
+            widgets=[
+                audio_box,
+                self.audio_display_label,
+                choose_button,
+                clear_button,
+                record_button,
+                record_status_label,
+            ],
+        )
 
         buttons = ttk.Frame(container)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(6, 0))
@@ -372,13 +383,22 @@ class LessonDialog(tk.Toplevel):
             else:
                 self.var_audio_display.set("Aucun fichier audio")
 
-    def _setup_audio_drag_and_drop(self, widget: tk.Widget) -> None:
+    def _initialize_audio_drag_and_drop(self, *, highlight_widget: tk.Widget, widgets: list[tk.Widget]) -> None:
+        if not widgets:
+            return
         try:
-            widget.tk.call("package", "require", "tkdnd")
+            highlight_widget.tk.call("package", "require", "tkdnd")
         except tk.TclError:
             return
         self._audio_drop_enabled = True
-        self._audio_drop_target = widget
+        self._audio_drop_highlight_widget = highlight_widget
+        for widget in widgets:
+            self._register_audio_drop_target(widget)
+
+    def _register_audio_drop_target(self, widget: tk.Widget) -> None:
+        if widget in self._audio_drop_targets:
+            return
+        self._audio_drop_targets.add(widget)
         widget.tk.call("tkdnd::drop_target", "register", widget._w, "DND_Files")
         drop_cmd = widget.register(self._on_audio_drop)
         widget.tk.call("bind", widget._w, "<<Drop>>", f"{{{drop_cmd} %D}}")
@@ -418,12 +438,13 @@ class LessonDialog(tk.Toplevel):
         return ""
 
     def _set_audio_drop_highlight(self, active: bool) -> None:
-        if not self._audio_drop_target:
+        widget = self._audio_drop_highlight_widget
+        if not widget:
             return
         if active:
-            self._audio_drop_target.configure(background="#d0ebff")
-        else:
-            self._audio_drop_target.configure(background=self._audio_drop_default_bg)
+            widget.configure(background="#d0ebff")
+        elif self._audio_drop_default_bg is not None:
+            widget.configure(background=self._audio_drop_default_bg)
 
     def _is_supported_audio_file(self, path: str) -> bool:
         return Path(path).suffix.lower() in AUDIO_FILE_EXTENSIONS
