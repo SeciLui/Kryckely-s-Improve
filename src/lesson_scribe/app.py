@@ -1362,18 +1362,25 @@ class LessonScribeApp(tk.Tk):
         if not job_started:
             lesson.transcript_path = None
 
-    def _resolve_vibe_executable(self) -> str:
+    def _resolve_vibe_executable(self) -> str | None:
         candidate = os.environ.get("VIBE_CLI", "vibe")
         candidate = os.path.expanduser(candidate)
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-        return candidate
+        found = shutil.which(candidate)
+        return found
 
     def _resolve_vibe_model(self) -> str | None:
-        value = os.environ.get("VIBE_MODEL_PATH")
-        if value:
-            expanded = os.path.expanduser(value)
-            return expanded if os.path.isfile(expanded) else None
+        candidate = os.environ.get("VIBE_MODEL_PATH")
+        if not candidate:
+            return None
+        expanded = os.path.expanduser(candidate)
+        if os.path.isfile(expanded):
+            return expanded
+        if self.current_workspace and not os.path.isabs(candidate):
+            workspace_candidate = (self.current_workspace / candidate).resolve()
+            if workspace_candidate.is_file():
+                return str(workspace_candidate)
         return None
 
     def _start_transcription_job(
@@ -1387,6 +1394,13 @@ class LessonScribeApp(tk.Tk):
         journal_abs: str,
     ) -> bool:
         vibe_exe = self._resolve_vibe_executable()
+        if not vibe_exe:
+            messagebox.showwarning(
+                "Vibe",
+                "Impossible de trouver le binaire 'vibe'. Configure VIBE_CLI ou ajoute-le au PATH.",
+                parent=self,
+            )
+            return False
         vibe_model = self._resolve_vibe_model()
         if not vibe_model:
             messagebox.showwarning(
@@ -1399,6 +1413,19 @@ class LessonScribeApp(tk.Tk):
             messagebox.showwarning("Audio", "Fichier audio introuvable pour la transcription.", parent=self)
             return False
 
+        language = os.environ.get("VIBE_LANGUAGE", "french")
+        threads_env = os.environ.get("VIBE_THREADS")
+        try:
+            threads = int(threads_env) if threads_env else None
+        except (TypeError, ValueError):
+            threads = None
+        temperature = os.environ.get("VIBE_TEMPERATURE") or None
+
+        try:
+            Path(transcript_abs).unlink(missing_ok=True)
+        except Exception:
+            pass
+
         job = {
             "lesson_id": lesson_id,
             "display_label": display_label,
@@ -1408,6 +1435,11 @@ class LessonScribeApp(tk.Tk):
             "journal_abs": journal_abs,
             "process": None,
             "cancel_event": threading.Event(),
+            "executable": vibe_exe,
+            "model": vibe_model,
+            "language": language,
+            "threads": threads,
+            "temperature": temperature,
         }
 
         worker = threading.Thread(target=self._run_transcription_job, args=(job,), daemon=True)
@@ -1424,28 +1456,34 @@ class LessonScribeApp(tk.Tk):
         transcript_abs = job["transcript_abs"]
         journal_abs = job["journal_abs"]
 
-        vibe_exe = self._resolve_vibe_executable()
-        vibe_model = self._resolve_vibe_model()
+        vibe_exe = job.get("executable")
+        if not vibe_exe:
+            self._transcription_queue.put(("error", lesson_id, "Binaire Vibe introuvable."))
+            return
+        vibe_model = job.get("model")
         if not vibe_model:
             self._transcription_queue.put(("error", lesson_id, "Modèle Vibe introuvable."))
             return
 
         env = os.environ.copy()
+        env.setdefault("NO_COLOR", "1")
         args = [
             vibe_exe,
-            "--model",
-            vibe_model,
             "--file",
             audio_abs,
+            "--model",
+            vibe_model,
+            "--format",
+            "txt",
+            "--write",
+            transcript_abs,
             "--language",
-            os.environ.get("VIBE_LANGUAGE", "french"),
+            job.get("language", "french"),
         ]
-        temperature = os.environ.get("VIBE_TEMPERATURE")
-        if temperature:
-            args += ["--temperature", temperature]
-        threads = os.environ.get("VIBE_THREADS")
-        if threads:
-            args += ["--threads", threads]
+        if job.get("temperature"):
+            args += ["--temperature", str(job["temperature"])]
+        if job.get("threads") is not None:
+            args += ["--n-threads", str(job["threads"])]
 
         try:
             process = subprocess.Popen(
@@ -1453,7 +1491,9 @@ class LessonScribeApp(tk.Tk):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,
                 env=env,
+                cwd=str(self.current_workspace) if self.current_workspace else None,
             )
         except Exception as exc:
             self._transcription_queue.put(("error", lesson_id, f"Échec du démarrage de Vibe : {exc}"))
@@ -1462,6 +1502,7 @@ class LessonScribeApp(tk.Tk):
         job["process"] = process
         self._transcription_queue.put(("start", lesson_id, display_label))
 
+        last_output_line = ""
         try:
             for line in iter(process.stdout.readline, ""):
                 if job["cancel_event"].is_set():
@@ -1469,6 +1510,7 @@ class LessonScribeApp(tk.Tk):
                 line = line.strip()
                 if not line:
                     continue
+                last_output_line = line
                 match = re.search(r"(\d+)%", line)
                 if match:
                     progress = safe_float(match.group(1), 0.0)
@@ -1482,14 +1524,19 @@ class LessonScribeApp(tk.Tk):
             return
 
         if process.returncode != 0:
-            tail = process.stdout.read().strip() if process.stdout else ""
-            if tail:
-                tail = tail.splitlines()[-1]
-            self._transcription_queue.put(("error", lesson_id, tail or "Transcription échouée."))
+            message = ""
+            try:
+                message = last_output_line
+            except Exception:
+                message = ""
+            self._transcription_queue.put(("error", lesson_id, message or "Transcription échouée."))
             return
 
         try:
-            content = Path(audio_abs).with_suffix(".txt").read_text(encoding="utf-8")
+            content = Path(transcript_abs).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            self._transcription_queue.put(("error", lesson_id, "Fichier de transcription introuvable."))
+            return
         except Exception as exc:
             self._transcription_queue.put(("error", lesson_id, f"Lecture transcription impossible : {exc}"))
             return
