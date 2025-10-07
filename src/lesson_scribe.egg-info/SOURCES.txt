@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+requirements.txt
+tasks.py
+src/lesson_scribe/__init__.py
+src/lesson_scribe/__main__.py
+src/lesson_scribe/app.py
+src/lesson_scribe.egg-info/PKG-INFO
+src/lesson_scribe.egg-info/SOURCES.txt
+src/lesson_scribe.egg-info/dependency_links.txt
+src/lesson_scribe.egg-info/entry_points.txt
+src/lesson_scribe.egg-info/requires.txt
+src/lesson_scribe.egg-info/top_level.txt
