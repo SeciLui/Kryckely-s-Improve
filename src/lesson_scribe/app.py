@@ -315,22 +315,16 @@ class LessonDialog(tk.Toplevel):
             foreground="#555555",
         )
         record_status_label.grid(row=2, column=0, columnspan=3, sticky="we", padx=4, pady=(0, 4))
-        self._initialize_audio_drag_and_drop(
-            highlight_widget=self.audio_display_label,
-            widgets=[
-                audio_box,
-                self.audio_display_label,
-                choose_button,
-                clear_button,
-                record_button,
-                record_status_label,
-            ],
-        )
-
         buttons = ttk.Frame(container)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(buttons, text="Annuler", command=self._on_cancel).grid(row=0, column=0, padx=6)
         ttk.Button(buttons, text="Enregistrer", command=self.on_save).grid(row=0, column=1, padx=6)
+
+        drop_targets = self._collect_audio_drop_widgets(self)
+        self._initialize_audio_drag_and_drop(
+            highlight_widget=self.audio_display_label,
+            widgets=drop_targets,
+        )
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.wait_visibility()
@@ -394,6 +388,22 @@ class LessonDialog(tk.Toplevel):
         self._audio_drop_highlight_widget = highlight_widget
         for widget in widgets:
             self._register_audio_drop_target(widget)
+
+    def _collect_audio_drop_widgets(self, root: tk.Widget) -> list[tk.Widget]:
+        widgets: list[tk.Widget] = []
+        seen: set[str] = set()
+
+        def visit(widget: tk.Widget) -> None:
+            widget_id = str(widget)
+            if widget_id in seen:
+                return
+            seen.add(widget_id)
+            widgets.append(widget)
+            for child in widget.winfo_children():
+                visit(child)
+
+        visit(root)
+        return widgets
 
     def _register_audio_drop_target(self, widget: tk.Widget) -> None:
         if widget in self._audio_drop_targets:
