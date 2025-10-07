@@ -3,4 +3,3 @@ pyperclip>=1.8
 python-dotenv>=1.0
 numpy>=1.23
 sounddevice>=0.4
-tkinterdnd2>=0.4.2

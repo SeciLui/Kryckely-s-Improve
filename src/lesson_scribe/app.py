@@ -15,53 +15,13 @@ import threading
 import time
 import uuid
 import wave
-import importlib.util
-import urllib.parse
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any, cast
+from typing import Any
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
-
-_tkdnd_spec = importlib.util.find_spec("tkinterdnd2")
-if _tkdnd_spec is not None:
-    _tkdnd_module = importlib.util.module_from_spec(_tkdnd_spec)
-    assert _tkdnd_spec.loader is not None  # pour mypy
-    sys.modules[_tkdnd_spec.name] = _tkdnd_module
-    _tkdnd_spec.loader.exec_module(_tkdnd_module)
-    DND_FILES = getattr(_tkdnd_module, "DND_FILES", "DND_Files")
-    TkinterDnD = getattr(_tkdnd_module, "TkinterDnD", None)
-else:
-    DND_FILES = "DND_Files"
-    TkinterDnD = None
-
-
-def _build_dnd_base_classes() -> tuple[type[tk.Tk], type[tk.Toplevel]]:
-    if TkinterDnD is None:
-        return tk.Tk, tk.Toplevel
-
-    dnd_tk_cls = cast(type[tk.Tk], getattr(TkinterDnD, "Tk", tk.Tk))
-
-    if hasattr(TkinterDnD, "Toplevel"):
-        dnd_toplevel_cls = cast(type[tk.Toplevel], getattr(TkinterDnD, "Toplevel"))
-        return dnd_tk_cls, dnd_toplevel_cls
-
-    require = getattr(TkinterDnD, "_require", None)
-    wrapper_cls = getattr(TkinterDnD, "DnDWrapper", None)
-    if not callable(require) or wrapper_cls is None:
-        return dnd_tk_cls, tk.Toplevel
-
-    class DnDToplevel(tk.Toplevel, wrapper_cls):  # type: ignore[misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            tk.Toplevel.__init__(self, *args, **kwargs)
-            require(self)
-
-    return dnd_tk_cls, cast(type[tk.Toplevel], DnDToplevel)
-
-
-BaseTk, BaseToplevel = _build_dnd_base_classes()
 
 from dotenv import load_dotenv
 
@@ -230,7 +190,7 @@ class Lesson:
 # ---------------------------------------------------------------------------
 
 
-class LessonDialog(BaseToplevel):
+class LessonDialog(tk.Toplevel):
     """Fenêtre modale pour créer ou éditer une leçon."""
 
     def __init__(self, master: tk.Misc, initial: Lesson | None = None):
@@ -272,10 +232,7 @@ class LessonDialog(BaseToplevel):
         self._record_timer_job: str | None = None
         self._recording_status_message: str | None = None
         self._temp_recordings: set[str] = set()
-        self._audio_drop_enabled = False
-        self._audio_drop_targets: set[tk.Widget] = set()
-        self._audio_drop_highlight_widget: tk.Widget | None = None
-        self._audio_drop_default_bg: str | None = None
+        self._audio_initial_directory = self._resolve_audio_initial_directory()
 
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
@@ -339,8 +296,6 @@ class LessonDialog(BaseToplevel):
             pady=4,
         )
         self.audio_display_label.grid(row=0, column=0, columnspan=3, sticky="we", padx=4, pady=(4, 2))
-        self._audio_drop_highlight_widget = self.audio_display_label
-        self._audio_drop_default_bg = self.audio_display_label.cget("background")
         choose_button = ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file)
         choose_button.grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
         clear_button = ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file)
@@ -359,11 +314,6 @@ class LessonDialog(BaseToplevel):
         ttk.Button(buttons, text="Annuler", command=self._on_cancel).grid(row=0, column=0, padx=6)
         ttk.Button(buttons, text="Enregistrer", command=self.on_save).grid(row=0, column=1, padx=6)
 
-        drop_targets = self._collect_audio_drop_widgets(self)
-        self._initialize_audio_drag_and_drop(
-            highlight_widget=self.audio_display_label,
-            widgets=drop_targets,
-        )
         self._refresh_audio_display_text(self.initial_audio_path or None)
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -374,8 +324,22 @@ class LessonDialog(BaseToplevel):
     # Gestion audio (sélection, effacement, enregistrement)
     # ------------------------------------------------------------------
 
+    def _resolve_audio_initial_directory(self) -> str | None:
+        candidates = [
+            os.environ.get("LESSON_SCRIBE_AUDIO_DIALOG_PATH"),
+            os.environ.get("LESSON_AUDIO_DIALOG_PATH"),
+        ]
+        for raw_value in candidates:
+            if not raw_value:
+                continue
+            expanded = os.path.expanduser(os.path.expandvars(raw_value))
+            if os.path.isdir(expanded):
+                return expanded
+        return None
+
     def select_audio_file(self) -> None:
         self.stop_audio_recording(keep_result=False, show_message=False)
+        initialdir = self._audio_initial_directory
         path = filedialog.askopenfilename(
             parent=self,
             title="Sélectionner un fichier audio",
@@ -383,9 +347,11 @@ class LessonDialog(BaseToplevel):
                 ("Fichiers audio", "*.wav *.mp3 *.m4a *.aac *.flac *.ogg"),
                 ("Tous les fichiers", "*.*"),
             ],
+            initialdir=initialdir,
         )
         if not path:
             return
+        self._audio_initial_directory = os.path.dirname(path) or self._audio_initial_directory
         self._apply_selected_audio_file(path)
 
     def clear_audio_file(self) -> None:
@@ -414,153 +380,9 @@ class LessonDialog(BaseToplevel):
         if path:
             self.var_audio_display.set(path)
         else:
-            if self._audio_drop_enabled:
-                self.var_audio_display.set(
-                    "Aucun fichier audio — glisser-déposer un fichier ici ou cliquer sur ‘Choisir un fichier…’"
-                )
-            else:
-                self.var_audio_display.set("Aucun fichier audio")
-
-    def _initialize_audio_drag_and_drop(self, *, highlight_widget: tk.Widget, widgets: list[tk.Widget]) -> None:
-        if not widgets or TkinterDnD is None:
-            self._audio_drop_enabled = False
-            return
-        self._audio_drop_highlight_widget = highlight_widget
-        any_registered = False
-        for widget in widgets:
-            if self._register_audio_drop_target(widget):
-                any_registered = True
-        self._audio_drop_enabled = any_registered
-
-    def _collect_audio_drop_widgets(self, root: tk.Widget) -> list[tk.Widget]:
-        widgets: list[tk.Widget] = []
-        seen: set[str] = set()
-
-        def visit(widget: tk.Widget) -> None:
-            widget_id = str(widget)
-            if widget_id in seen:
-                return
-            seen.add(widget_id)
-            widgets.append(widget)
-            for child in widget.winfo_children():
-                visit(child)
-
-        visit(root)
-        return widgets
-
-    def _register_audio_drop_target(self, widget: tk.Widget) -> bool:
-        if widget in self._audio_drop_targets:
-            return True
-        drop_register = getattr(widget, "drop_target_register", None)
-        dnd_bind = getattr(widget, "dnd_bind", None)
-        if not callable(drop_register) or not callable(dnd_bind):
-            return False
-        try:
-            drop_register(
-                DND_FILES,
-                "DND_Text",
-                "text/uri-list",
-                "CF_HDROP",
+            self.var_audio_display.set(
+                "Aucun fichier audio — cliquer sur ‘Choisir un fichier…’ ou utiliser l’enregistrement."
             )
-
-            def _handle_drop(event: Any) -> str:
-                return self._on_audio_drop(event)
-
-            def _handle_drag_enter(event: Any) -> str:
-                return self._on_audio_drag_enter(event)
-
-            def _handle_drag_leave(event: Any) -> str:
-                return self._on_audio_drag_leave(event)
-
-            for sequence in ("<<Drop>>", f"<<Drop:{DND_FILES}>>"):
-                dnd_bind(sequence, _handle_drop)
-            for sequence in ("<<DragEnter>>", f"<<DragEnter:{DND_FILES}>>"):
-                dnd_bind(sequence, _handle_drag_enter)
-            for sequence in ("<<DragLeave>>", f"<<DragLeave:{DND_FILES}>>"):
-                dnd_bind(sequence, _handle_drag_leave)
-        except (tk.TclError, RuntimeError):
-            return False
-        self._audio_drop_targets.add(widget)
-        return True
-
-    def _on_audio_drag_enter(self, _event: Any = None) -> str:
-        self._set_audio_drop_highlight(True)
-        if _event is not None and getattr(_event, "action", ""):
-            return getattr(_event, "action")
-        return "copy"
-
-    def _on_audio_drag_leave(self, _event: Any = None) -> str:
-        self._set_audio_drop_highlight(False)
-        if _event is not None and getattr(_event, "action", ""):
-            return getattr(_event, "action")
-        return "copy"
-
-    def _on_audio_drop(self, event: Any | None = None) -> str:
-        self._set_audio_drop_highlight(False)
-        data = getattr(event, "data", None) if event is not None else None
-        paths = self._parse_dnd_file_list(data)
-        if not paths:
-            return getattr(event, "action", "copy") if event is not None else "copy"
-        path = os.path.abspath(paths[0])
-        if not os.path.isfile(path):
-            messagebox.showwarning("Audio", "Le fichier déposé est introuvable.", parent=self)
-            return getattr(event, "action", "copy") if event is not None else "copy"
-        if not self._is_supported_audio_file(path):
-            messagebox.showwarning(
-                "Audio",
-                "Seuls les fichiers audio (wav, mp3, m4a, aac, flac, ogg) sont acceptés.",
-                parent=self,
-            )
-            return getattr(event, "action", "copy") if event is not None else "copy"
-        self.stop_audio_recording(keep_result=False, show_message=False)
-        self._apply_selected_audio_file(path)
-        if event is not None and getattr(event, "action", ""):
-            return getattr(event, "action")
-        return "copy"
-
-    def _parse_dnd_file_list(self, data: str | None) -> list[str]:
-        if not data:
-            return []
-        try:
-            raw_items = self.tk.splitlist(data)
-        except tk.TclError:
-            raw_items = data.split()
-
-        results: list[str] = []
-        for item in raw_items:
-            if not item:
-                continue
-            # Les systèmes basés sur XDND transmettent souvent des URI file://.
-            candidate = item.strip()
-            if candidate.startswith("file://"):
-                parsed = urllib.parse.urlparse(candidate)
-                if parsed.scheme.lower() != "file":
-                    continue
-                path = urllib.parse.unquote(parsed.path or "")
-                netloc = parsed.netloc or ""
-                if netloc and netloc.lower() not in {"localhost", "127.0.0.1"}:
-                    if not path.startswith("//"):
-                        path = f"//{netloc}{path}"
-                    elif not path and netloc:
-                        path = f"//{netloc}"
-                if sys.platform.startswith("win") and path.startswith("/") and len(path) > 2 and path[2] == ":":
-                    path = path.lstrip("/\\")
-                candidate = path
-            elif candidate.startswith("{") and candidate.endswith("}"):
-                candidate = candidate[1:-1]
-            if sys.platform.startswith("win"):
-                candidate = candidate.replace("/", "\\")
-            results.append(candidate)
-        return results
-
-    def _set_audio_drop_highlight(self, active: bool) -> None:
-        widget = self._audio_drop_highlight_widget
-        if not widget:
-            return
-        if active:
-            widget.configure(background="#d0ebff")
-        elif self._audio_drop_default_bg is not None:
-            widget.configure(background=self._audio_drop_default_bg)
 
     def _is_supported_audio_file(self, path: str) -> bool:
         return Path(path).suffix.lower() in AUDIO_FILE_EXTENSIONS
@@ -792,7 +614,7 @@ class LessonDialog(BaseToplevel):
 # ---------------------------------------------------------------------------
 
 
-class LessonScribeApp(BaseTk):
+class LessonScribeApp(tk.Tk):
     """Fenêtre principale de Lesson Scribe."""
 
     def __init__(self) -> None:

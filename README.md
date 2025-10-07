@@ -58,10 +58,6 @@ pip install -e .
 > Astuce : `invoke install --dev` installe le projet en mode editable avec les
 > dépendances de développement.
 
-> Remarque : la prise en charge du glisser-déposer global de l’audio s’appuie sur
-> [`tkinterdnd2`](https://pypi.org/project/tkinterdnd2/), installé automatiquement
-> via `requirements.txt`.
-
 ## Lancement de l’application
 
 ```bash
@@ -85,6 +81,9 @@ ajustez les valeurs selon votre environnement :
 * `LESSON_SCRIBE_DEFAULT_TIME` (alias : `LESSON_DEFAULT_TIME`) : horaire à
   pré-remplir lors de la création d’une leçon. Utilisez `HH:MM-HH:MM` pour une
   plage complète ou uniquement `HH:MM` pour renseigner l’heure de début.
+* `LESSON_SCRIBE_AUDIO_DIALOG_PATH` (alias : `LESSON_AUDIO_DIALOG_PATH`) : dossier
+  ouvert par défaut lorsque vous cliquez sur « Choisir un fichier… » pour
+  sélectionner un audio.
 * `VIBE_CLI`, `VIBE_MODEL_PATH`, `VIBE_LANGUAGE`, `VIBE_THREADS`,
   `VIBE_TEMPERATURE` : paramètres optionnels pour piloter Vibe.
 
