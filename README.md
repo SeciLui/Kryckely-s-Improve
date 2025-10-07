@@ -81,6 +81,9 @@ ajustez les valeurs selon votre environnement :
 * `LESSON_SCRIBE_DEFAULT_TIME` (alias : `LESSON_DEFAULT_TIME`) : horaire à
   pré-remplir lors de la création d’une leçon. Utilisez `HH:MM-HH:MM` pour une
   plage complète ou uniquement `HH:MM` pour renseigner l’heure de début.
+* `LESSON_SCRIBE_AUDIO_DIALOG_PATH` (alias : `LESSON_AUDIO_DIALOG_PATH`) : dossier
+  ouvert par défaut lorsque vous cliquez sur « Choisir un fichier… » pour
+  sélectionner un audio.
 * `VIBE_CLI`, `VIBE_MODEL_PATH`, `VIBE_LANGUAGE`, `VIBE_THREADS`,
   `VIBE_TEMPERATURE` : paramètres optionnels pour piloter Vibe.
 

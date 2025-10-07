@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover - dépendances optionnelles
 APP_NAME = "Lesson Scribe"
 WORKSPACE_VERSION = 1
 TRANSCRIPT_HEADER = "\n\n--- Transcription Vibe ---\n"
+AUDIO_FILE_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 HELP_TEXT = (
     "Bienvenue dans Lesson Scribe !\n\n"
     "1. Ouvre ou crée un workspace.\n"
@@ -214,8 +215,7 @@ class LessonDialog(tk.Toplevel):
         self.var_end = tk.StringVar(value=initial.end or "")
         self.var_minutes = tk.StringVar(value=format_minutes(initial.minutes))
 
-        audio_display = self.initial_audio_path or "Aucun fichier audio"
-        self.var_audio_display = tk.StringVar(value=audio_display)
+        self.var_audio_display = tk.StringVar()
         self.var_record_button = tk.StringVar(value="Enregistrer…")
         self.var_record_status = tk.StringVar(value="Aucun enregistrement en cours.")
 
@@ -232,6 +232,7 @@ class LessonDialog(tk.Toplevel):
         self._record_timer_job: str | None = None
         self._recording_status_message: str | None = None
         self._temp_recordings: set[str] = set()
+        self._audio_initial_directory = self._resolve_audio_initial_directory()
 
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
@@ -284,29 +285,36 @@ class LessonDialog(tk.Toplevel):
         audio_box.columnconfigure(1, weight=0)
         audio_box.columnconfigure(2, weight=0)
 
-        ttk.Label(audio_box, textvariable=self.var_audio_display, wraplength=380).grid(
-            row=0, column=0, columnspan=3, sticky="we", padx=4, pady=(4, 2)
+        self.audio_display_label = tk.Label(
+            audio_box,
+            textvariable=self.var_audio_display,
+            wraplength=380,
+            anchor="w",
+            justify="left",
+            relief="groove",
+            padx=6,
+            pady=4,
         )
-        ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file).grid(
-            row=1, column=0, sticky="w", padx=4, pady=(0, 4)
-        )
-        ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file).grid(
-            row=1, column=1, sticky="w", padx=4, pady=(0, 4)
-        )
-        ttk.Button(audio_box, textvariable=self.var_record_button, command=self.toggle_audio_recording).grid(
-            row=1, column=2, sticky="e", padx=4, pady=(0, 4)
-        )
-        ttk.Label(
+        self.audio_display_label.grid(row=0, column=0, columnspan=3, sticky="we", padx=4, pady=(4, 2))
+        choose_button = ttk.Button(audio_box, text="Choisir un fichier…", command=self.select_audio_file)
+        choose_button.grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+        clear_button = ttk.Button(audio_box, text="Effacer", command=self.clear_audio_file)
+        clear_button.grid(row=1, column=1, sticky="w", padx=4, pady=(0, 4))
+        record_button = ttk.Button(audio_box, textvariable=self.var_record_button, command=self.toggle_audio_recording)
+        record_button.grid(row=1, column=2, sticky="e", padx=4, pady=(0, 4))
+        record_status_label = ttk.Label(
             audio_box,
             textvariable=self.var_record_status,
             wraplength=380,
             foreground="#555555",
-        ).grid(row=2, column=0, columnspan=3, sticky="we", padx=4, pady=(0, 4))
-
+        )
+        record_status_label.grid(row=2, column=0, columnspan=3, sticky="we", padx=4, pady=(0, 4))
         buttons = ttk.Frame(container)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(6, 0))
         ttk.Button(buttons, text="Annuler", command=self._on_cancel).grid(row=0, column=0, padx=6)
         ttk.Button(buttons, text="Enregistrer", command=self.on_save).grid(row=0, column=1, padx=6)
+
+        self._refresh_audio_display_text(self.initial_audio_path or None)
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.wait_visibility()
@@ -316,8 +324,22 @@ class LessonDialog(tk.Toplevel):
     # Gestion audio (sélection, effacement, enregistrement)
     # ------------------------------------------------------------------
 
+    def _resolve_audio_initial_directory(self) -> str | None:
+        candidates = [
+            os.environ.get("LESSON_SCRIBE_AUDIO_DIALOG_PATH"),
+            os.environ.get("LESSON_AUDIO_DIALOG_PATH"),
+        ]
+        for raw_value in candidates:
+            if not raw_value:
+                continue
+            expanded = os.path.expanduser(os.path.expandvars(raw_value))
+            if os.path.isdir(expanded):
+                return expanded
+        return None
+
     def select_audio_file(self) -> None:
         self.stop_audio_recording(keep_result=False, show_message=False)
+        initialdir = self._audio_initial_directory
         path = filedialog.askopenfilename(
             parent=self,
             title="Sélectionner un fichier audio",
@@ -325,15 +347,12 @@ class LessonDialog(tk.Toplevel):
                 ("Fichiers audio", "*.wav *.mp3 *.m4a *.aac *.flac *.ogg"),
                 ("Tous les fichiers", "*.*"),
             ],
+            initialdir=initialdir,
         )
         if not path:
             return
-        if self._audio_source_is_temp and self.audio_source_path:
-            self._discard_temp_recording(self.audio_source_path)
-        self.audio_source_path = path
-        self.audio_cleared = False
-        self._audio_source_is_temp = False
-        self.var_audio_display.set(path)
+        self._audio_initial_directory = os.path.dirname(path) or self._audio_initial_directory
+        self._apply_selected_audio_file(path)
 
     def clear_audio_file(self) -> None:
         self.stop_audio_recording(keep_result=False, show_message=False)
@@ -343,7 +362,30 @@ class LessonDialog(tk.Toplevel):
         self.audio_cleared = True
         self.initial_audio_path = ""
         self._audio_source_is_temp = False
-        self.var_audio_display.set("Aucun fichier audio")
+        self._refresh_audio_display_text(None)
+        self.var_record_status.set("Aucun enregistrement en cours.")
+
+    def _apply_selected_audio_file(self, path: str) -> None:
+        if self._audio_source_is_temp and self.audio_source_path:
+            self._discard_temp_recording(self.audio_source_path)
+        self.audio_source_path = path
+        self.audio_cleared = False
+        self._audio_source_is_temp = False
+        self._refresh_audio_display_text(path)
+        self.var_record_status.set(
+            "Fichier audio chargé. La transcription démarrera après l’enregistrement de la leçon."
+        )
+
+    def _refresh_audio_display_text(self, path: str | None) -> None:
+        if path:
+            self.var_audio_display.set(path)
+        else:
+            self.var_audio_display.set(
+                "Aucun fichier audio — cliquer sur ‘Choisir un fichier…’ ou utiliser l’enregistrement."
+            )
+
+    def _is_supported_audio_file(self, path: str) -> bool:
+        return Path(path).suffix.lower() in AUDIO_FILE_EXTENSIONS
 
     def toggle_audio_recording(self) -> None:
         if self._recording_active:
@@ -367,7 +409,7 @@ class LessonDialog(tk.Toplevel):
             self._discard_temp_recording(self.audio_source_path)
             self.audio_source_path = None
             self._audio_source_is_temp = False
-            self.var_audio_display.set("Aucun fichier audio")
+            self._refresh_audio_display_text(None)
 
         self._recording_stop_event = threading.Event()
         self._recording_finished_event = threading.Event()
@@ -504,7 +546,7 @@ class LessonDialog(tk.Toplevel):
         self._temp_recordings.add(self.audio_source_path)
         self._audio_source_is_temp = True
         self.audio_cleared = False
-        self.var_audio_display.set(self.audio_source_path)
+        self._refresh_audio_display_text(self.audio_source_path)
 
         status = "Enregistrement terminé."
         if self._recording_status_message:
@@ -636,8 +678,20 @@ class LessonScribeApp(tk.Tk):
 
     def _apply_lesson_defaults(self, lesson: Lesson) -> Lesson:
         if not lesson.title and self.default_title_template:
-            date_label = lesson.date or datetime.date.today().isoformat()
-            lesson.title = f"{self.default_title_template} {date_label}".strip()
+            template = self.default_title_template
+            if "{" in template and "}" in template:
+                today = datetime.date.today().isoformat()
+                safe_date = lesson.date or today
+                try:
+                    template = template.format(
+                        date=safe_date,
+                        start=lesson.start or "",
+                        end=lesson.end or "",
+                        minutes=lesson.minutes or "",
+                    )
+                except Exception:
+                    template = self.default_title_template
+            lesson.title = template.strip()
         if lesson.minutes <= 0 and lesson.start and lesson.end:
             computed = minutes_from_times(lesson.start, lesson.end)
             if computed is not None:
