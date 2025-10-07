@@ -1399,6 +1399,11 @@ class LessonScribeApp(tk.Tk):
             messagebox.showwarning("Audio", "Fichier audio introuvable pour la transcription.", parent=self)
             return False
 
+        try:
+            Path(transcript_abs).unlink(missing_ok=True)
+        except Exception:
+            pass
+
         job = {
             "lesson_id": lesson_id,
             "display_label": display_label,
@@ -1439,6 +1444,10 @@ class LessonScribeApp(tk.Tk):
             audio_abs,
             "--language",
             os.environ.get("VIBE_LANGUAGE", "french"),
+            "--write",
+            transcript_abs,
+            "--format",
+            "txt",
         ]
         temperature = os.environ.get("VIBE_TEMPERATURE")
         if temperature:
@@ -1462,6 +1471,7 @@ class LessonScribeApp(tk.Tk):
         job["process"] = process
         self._transcription_queue.put(("start", lesson_id, display_label))
 
+        last_output_line = ""
         try:
             for line in iter(process.stdout.readline, ""):
                 if job["cancel_event"].is_set():
@@ -1469,6 +1479,7 @@ class LessonScribeApp(tk.Tk):
                 line = line.strip()
                 if not line:
                     continue
+                last_output_line = line
                 match = re.search(r"(\d+)%", line)
                 if match:
                     progress = safe_float(match.group(1), 0.0)
@@ -1482,14 +1493,19 @@ class LessonScribeApp(tk.Tk):
             return
 
         if process.returncode != 0:
-            tail = process.stdout.read().strip() if process.stdout else ""
-            if tail:
-                tail = tail.splitlines()[-1]
-            self._transcription_queue.put(("error", lesson_id, tail or "Transcription échouée."))
+            message = ""
+            try:
+                message = last_output_line
+            except Exception:
+                message = ""
+            self._transcription_queue.put(("error", lesson_id, message or "Transcription échouée."))
             return
 
         try:
-            content = Path(audio_abs).with_suffix(".txt").read_text(encoding="utf-8")
+            content = Path(transcript_abs).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            self._transcription_queue.put(("error", lesson_id, "Fichier de transcription introuvable."))
+            return
         except Exception as exc:
             self._transcription_queue.put(("error", lesson_id, f"Lecture transcription impossible : {exc}"))
             return
