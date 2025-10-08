@@ -233,6 +233,7 @@ class LessonDialog(tk.Toplevel):
         self._recording_status_message: str | None = None
         self._temp_recordings: set[str] = set()
         self._audio_initial_directory = self._resolve_audio_initial_directory()
+        self._saved_temp_recording: str | None = None
 
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
@@ -362,6 +363,7 @@ class LessonDialog(tk.Toplevel):
         self.audio_cleared = True
         self.initial_audio_path = ""
         self._audio_source_is_temp = False
+        self._saved_temp_recording = None
         self._refresh_audio_display_text(None)
         self.var_record_status.set("Aucun enregistrement en cours.")
 
@@ -371,6 +373,7 @@ class LessonDialog(tk.Toplevel):
         self.audio_source_path = path
         self.audio_cleared = False
         self._audio_source_is_temp = False
+        self._saved_temp_recording = None
         self._refresh_audio_display_text(path)
         self.var_record_status.set(
             "Fichier audio chargé. La transcription démarrera après l’enregistrement de la leçon."
@@ -410,6 +413,7 @@ class LessonDialog(tk.Toplevel):
             self.audio_source_path = None
             self._audio_source_is_temp = False
             self._refresh_audio_display_text(None)
+        self._saved_temp_recording = None
 
         self._recording_stop_event = threading.Event()
         self._recording_finished_event = threading.Event()
@@ -581,7 +585,14 @@ class LessonDialog(tk.Toplevel):
 
     def destroy(self) -> None:  # type: ignore[override]
         self.stop_audio_recording(keep_result=False, show_message=False)
+        keep_recording = self._saved_temp_recording if self._audio_source_is_temp else None
         for recording in list(self._temp_recordings):
+            if keep_recording:
+                try:
+                    if os.path.abspath(recording) == os.path.abspath(keep_recording):
+                        continue
+                except Exception:
+                    pass
             self._discard_temp_recording(recording)
         super().destroy()
 
@@ -604,6 +615,8 @@ class LessonDialog(tk.Toplevel):
         lesson.audio_source_path = self.audio_source_path  # type: ignore[attr-defined]
         lesson.audio_removed = self.audio_cleared  # type: ignore[attr-defined]
         lesson.audio_source_is_temp = self._audio_source_is_temp  # type: ignore[attr-defined]
+        if self._audio_source_is_temp and self.audio_source_path:
+            self._saved_temp_recording = self.audio_source_path
 
         self.result = lesson
         self.destroy()
